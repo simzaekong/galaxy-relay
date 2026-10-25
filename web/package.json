@@ -1,0 +1,14 @@
+{
+  "name": "galaxy-relay-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/model.test.mjs test/crypto.test.mjs test/notifications.test.mjs test/groups.test.mjs",
+    "test:browser": "playwright test",
+    "test:webkit": "playwright test --config playwright.graphics.config.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

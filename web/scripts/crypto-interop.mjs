@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import '../src/crypto.js';
+const adb=process.env.ADB_PATH||'adb';
+const vector=JSON.parse(execFileSync(adb,['-s','emulator-5580','exec-out','run-as','kr.infosphere.galaxyrelay','cat','files/e2ee-test-vector.json'],{encoding:'utf8'}));
+const material=await EventCrypto.importKey(vector.key);
+assert.equal(material.key.extractable,false);
+assert.deepEqual(await EventCrypto.decode(vector.wire,material),vector.original);
+await assert.rejects(EventCrypto.decode(vector.original,material));
+await assert.rejects(EventCrypto.decode({...vector.wire,id:'evt_11111111-1111-4111-8111-111111111111'},material));
+await assert.rejects(EventCrypto.decode({...vector.wire,ciphertext:'A'+vector.wire.ciphertext.slice(1)},material));
+await assert.rejects(EventCrypto.decode(vector.wire,await EventCrypto.importKey(Buffer.alloc(32,1).toString('base64url'))));
+console.log('PASS: Android AES-256-GCM → Web Crypto interoperability, tamper rejection, wrong key and plaintext downgrade rejection.');

@@ -1,0 +1,7 @@
+import './db.js';
+export async function api(path,body){if(!navigator.onLine)throw new Error('OFFLINE');const credential=await RelayDB.meta('credential');const headers={'Content-Type':'application/json'};if(credential?.token)headers.Authorization='Bearer '+credential.token;
+  const response=await fetch(path,{method:body?'POST':'GET',headers,cache:'no-store',body:body?JSON.stringify({timestamp:Date.now(),nonce:crypto.randomUUID(),...body}):undefined,signal:AbortSignal.timeout(15000)});
+  let value;try{value=await response.json();}catch{throw new Error('SERVER_UNAVAILABLE');}if(!response.ok){if(response.status===401&&credential)await RelayDB.setMeta('credential',null);throw new Error(value.error||'SERVER_UNAVAILABLE');}return value;
+}
+export const command=(type,eventId,extra={})=>api('/api/'+(type==='settings'?'settings':'command/'+type),{commandId:'cmd_'+crypto.randomUUID(),...(eventId?{eventId}:{}),...extra});
+export function readable(error){return ({E2EE_REPLY_KEY_REQUIRED:'답장을 암호화하려면 설정에서 Galaxy의 같은 E2EE 키를 다시 저장해주세요.',INVALID_REPLY:'답장은 1~500자로 입력해주세요.',REPLY_TOO_LARGE:'답장이 너무 깁니다. 500자 이내로 줄여주세요.',OFFLINE:'오프라인 상태에서는 Galaxy에 명령을 보낼 수 없습니다.',UNAUTHORIZED:'연결 인증이 만료됐습니다. Galaxy와 다시 연결해주세요.',NOT_PAIRED:'Galaxy 앱에서 연결을 승인해주세요.',PAIR_EXPIRED_OR_USED:'연결 코드가 만료됐거나 사용됐습니다. Galaxy에서 새 코드를 생성해주세요.',RATE_LIMITED:'요청이 너무 많습니다. 1분 후 다시 시도해주세요.',FCM_FAILED:'Galaxy에 요청을 전달하지 못했습니다. Galaxy 인터넷과 Firebase 설정을 확인해주세요.',PUSH_NOT_REGISTERED:'알림 활성화를 눌러 Push를 등록해주세요.',INVALID_INPUT:'입력값을 확인해주세요.'})[error?.message]||'Galaxy와 연결할 수 없습니다. 인터넷과 Relay 앱 상태를 확인해주세요.';}

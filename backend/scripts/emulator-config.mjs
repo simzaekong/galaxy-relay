@@ -1,0 +1,10 @@
+const backend=process.env.RELAY_BACKEND_URL;
+if(!backend)throw new Error('Set RELAY_BACKEND_URL to your own test server.');
+import fs from 'node:fs';
+import {execFileSync} from 'node:child_process';
+const root=new URL('../../',import.meta.url), secrets=JSON.parse(fs.readFileSync(new URL('.secrets/cloudflare.json',root),'utf8'));
+const file=new URL('.secrets/relay-runtime-config.json',root);
+fs.writeFileSync(file,JSON.stringify({backend,installSecret:secrets.INSTALL_SECRET}));
+const adb=process.env.ADB_PATH||'adb';
+execFileSync(adb,['-s','emulator-5580','push',file.pathname.replace(/^\/(\w:)/,'$1'),'/data/local/tmp/relay-runtime-config.json'],{stdio:'ignore'});
+console.log('Runtime config provisioned only to the isolated test emulator.');

@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import {randomBytes} from 'node:crypto';
+import webpush from 'web-push';
+const dir = new URL('../../.secrets/', import.meta.url);
+fs.mkdirSync(dir, {recursive:true});
+const file = new URL('cloudflare.json', dir);
+if (fs.existsSync(file)) throw new Error('Secrets already exist; never rotate them by accident.');
+const vapid=webpush.generateVAPIDKeys();
+fs.writeFileSync(file,JSON.stringify({INSTALL_SECRET:randomBytes(32).toString('base64url'),COMMAND_SECRET:randomBytes(32).toString('base64url'),VAPID_PUBLIC_KEY:vapid.publicKey,VAPID_PRIVATE_KEY:vapid.privateKey},null,2));
+console.log('Generated ignored .secrets/cloudflare.json. Values are not printed.');

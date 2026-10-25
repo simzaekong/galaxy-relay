@@ -1,0 +1,101 @@
+name: Build native iPhone IPA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Select Xcode with Liquid Glass SDK
+        run: |
+          XCODE=$(python3 -c 'import glob,re; paths=glob.glob("/Applications/Xcode*.app"); stable=[p for p in paths if "beta" not in p.lower() and re.search(r"Xcode_?(26|27)",p)]; print(max(stable,key=lambda p:tuple(map(int,re.findall(r"[0-9]+",p)))))')
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+      - name: Check Xcode and protocol tests
+        run: |
+          xcodebuild -version
+          cd ios
+          swift test
+      - name: Generate Xcode project
+        run: |
+          swift ios/scripts/icon.swift
+          brew install xcodegen
+          cd ios
+          xcodegen generate
+      - name: Compile iPhone application without Apple credentials
+        run: |
+          xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath .build-ios CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package unsigned IPA for AltStore
+        run: |
+          mkdir -p .build-ipa/Payload
+          cp -R .build-ios/Build/Products/Release-iphoneos/GalaxyRelay.app .build-ipa/Payload/
+          cd .build-ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload GalaxyRelay-unsigned.ipa
+          shasum -a 256 GalaxyRelay-unsigned.ipa > SHA256SUMS.txt
+      - name: Compile and launch native simulator smoke test
+        run: |
+          xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath .build-ios-sim CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          SIMULATOR=$(xcrun simctl list devices available -j | python3 -c 'import json,sys,re; d=json.load(sys.stdin); runtimes=sorted(d["devices"],key=lambda k:tuple(map(int,re.findall(r"[0-9]+",k))),reverse=True); print(next(x["udid"] for k in runtimes if "iOS" in k for x in d["devices"][k] if x.get("isAvailable") and x["name"].startswith("iPhone")))')
+          xcrun simctl boot "$SIMULATOR"
+          xcrun simctl bootstatus "$SIMULATOR" -b
+          xcrun simctl install "$SIMULATOR" .build-ios-sim/Build/Products/Release-iphonesimulator/GalaxyRelay.app
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR" -derivedDataPath .build-ios-tests CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="$PWD/ios/ci-simulator.entitlements" test
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          sleep 3
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-native-smoke.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl status_bar "$SIMULATOR" override --time "9:41" --batteryState charged --batteryLevel 100
+          xcrun simctl ui "$SIMULATOR" appearance dark
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview
+          sleep 3
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-dark.png
+          xcrun simctl ui "$SIMULATOR" appearance light
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-light.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl ui "$SIMULATOR" appearance dark
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-inbox
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-inbox.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-detail
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-detail.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-settings
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-settings.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-remote
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-remote-dark.png
+          xcrun simctl ui "$SIMULATOR" appearance light
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-remote-light.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl ui "$SIMULATOR" appearance dark
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-disconnected
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-home-disconnected.png
+          xcrun simctl terminate "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+          xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios --design-preview --design-remote -UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityXXXL
+          sleep 2
+          xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-design-remote-accessibility.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: GalaxyRelay-unsigned-IPA
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .build-ipa/GalaxyRelay-unsigned.ipa
+            .build-ipa/SHA256SUMS.txt
+            .build-ipa/iPhone-native-smoke.png
+            .build-ipa/iPhone-design-*.png
+          retention-days: 3
+
