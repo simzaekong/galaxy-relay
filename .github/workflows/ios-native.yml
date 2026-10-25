@@ -37,15 +37,26 @@ jobs:
           cd .build-ipa
           ditto -c -k --sequesterRsrc --keepParent Payload GalaxyRelay-unsigned.ipa
           shasum -a 256 GalaxyRelay-unsigned.ipa > SHA256SUMS.txt
-      - name: Compile and launch native simulator smoke test
+      - name: Compile simulator application
+        timeout-minutes: 6
         run: |
           xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath .build-ios-sim CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Boot simulator and launch application
+        timeout-minutes: 5
+        run: |
           SIMULATOR=$(xcrun simctl list devices available -j | python3 -c 'import json,sys,re; d=json.load(sys.stdin); runtimes=sorted(d["devices"],key=lambda k:tuple(map(int,re.findall(r"[0-9]+",k))),reverse=True); print(next(x["udid"] for k in runtimes if "iOS" in k for x in d["devices"][k] if x.get("isAvailable") and x["name"].startswith("iPhone")))')
+          echo "SIMULATOR=$SIMULATOR" >> "$GITHUB_ENV"
           xcrun simctl boot "$SIMULATOR"
           xcrun simctl bootstatus "$SIMULATOR" -b
           xcrun simctl install "$SIMULATOR" .build-ios-sim/Build/Products/Release-iphonesimulator/GalaxyRelay.app
           xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios
+      - name: Run simulator application tests
+        timeout-minutes: 6
+        run: |
           xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR" -derivedDataPath .build-ios-tests CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="$PWD/ios/ci-simulator.entitlements" test
+      - name: Capture simulator screens
+        timeout-minutes: 4
+        run: |
           xcrun simctl launch "$SIMULATOR" kr.infosphere.galaxyrelay.ios
           sleep 3
           xcrun simctl io "$SIMULATOR" screenshot .build-ipa/iPhone-native-smoke.png
