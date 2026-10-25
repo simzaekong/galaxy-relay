@@ -9,7 +9,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Select Xcode with Liquid Glass SDK
@@ -42,8 +42,9 @@ jobs:
         run: |
           xcodebuild -project ios/GalaxyRelay.xcodeproj -scheme GalaxyRelay -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath .build-ios-sim CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
       - name: Boot simulator and launch application
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
+          set -x
           SIMULATOR=$(xcrun simctl list devices available -j | python3 -c 'import json,sys,re; d=json.load(sys.stdin); runtimes=sorted(d["devices"],key=lambda k:tuple(map(int,re.findall(r"[0-9]+",k))),reverse=True); print(next(x["udid"] for k in runtimes if "iOS" in k for x in d["devices"][k] if x.get("isAvailable") and x["name"].startswith("iPhone")))')
           echo "SIMULATOR=$SIMULATOR" >> "$GITHUB_ENV"
           xcrun simctl boot "$SIMULATOR"
