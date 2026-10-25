@@ -8,8 +8,8 @@ extension RelayConnectionStatus {
  @ObservedObject var model:RelayModel
  @ObservedObject var ble:BLELink
  var body:some View{
-  TimelineView(.periodic(from:.now,by:1)){context in
-   let status=model.connectionStatus(at:context.date)
+  TimelineView(.periodic(from:.now,by:1)){_ in
+   let status=model.connectionStatus()
    Label(status.title,systemImage:status.symbol).foregroundStyle(status.color)
   }
  }
