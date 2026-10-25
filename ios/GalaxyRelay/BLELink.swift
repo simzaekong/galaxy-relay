@@ -9,6 +9,12 @@ enum PairPhase {case idle,searching,connecting,discovering,authenticating,confir
  static let rx=CBUUID(string:"58b80002-a8da-4eae-bba8-50938ca8ca5b"),tx=CBUUID(string:"58b80003-a8da-4eae-bba8-50938ca8ca5b")
  @Published private(set) var phase:PairPhase = .idle
  var isConnecting:Bool{[PairPhase.searching,.connecting,.discovering,.authenticating,.confirming].contains(phase)}
+ var isActivelyConnecting:Bool{
+  #if targetEnvironment(simulator)
+  if ProcessInfo.processInfo.arguments.contains("--design-preview"){return isConnecting}
+  #endif
+  return isConnecting && enabled && manager.state == .poweredOn
+ }
  @Published private(set) var ready=false
  @Published private(set) var status="Galaxy 연결을 준비하세요"
  let disconnectLocation=DisconnectLocationRecorder()
@@ -161,6 +167,7 @@ enum PairPhase {case idle,searching,connecting,discovering,authenticating,confir
   remoteBattery=PeerBattery(pairId:"preview",battery:BatteryReading(level:78,state:"unplugged"),reportedAt:NativeCrypto.now()-180000);localBattery=BatteryReading(level:94,state:"charging")
   remoteSupported=true;remote.preview();for value in [-85,-84,-86,-85,-65,-64,-66,-65]{signal.record(value)};signalAt=Date()
   if ProcessInfo.processInfo.arguments.contains("--design-disconnected"){ready=false;phase = .connecting;status="블루투스 끊김 · 자동 재연결 중…";remote.disconnected();signal=SignalTrend();signalAt=nil}
+  if ProcessInfo.processInfo.arguments.contains("--design-server") || ProcessInfo.processInfo.arguments.contains("--design-offline"){ready=false;phase = .idle;status="블루투스 연결이 끊어졌습니다.";remote.disconnected();signal=SignalTrend();signalAt=nil}
  }
 
  #endif

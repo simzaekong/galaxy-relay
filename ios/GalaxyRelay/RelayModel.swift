@@ -7,14 +7,33 @@ import UserNotifications
  @Published var settings:PairSettings?
  @Published var notice="";@Published var busy=false
  @Published var openEventId:String?
- @Published var foreground=false
+ @Published var foreground=false{didSet{if !foreground{resetServerConnection()}}}
+ @Published private(set) var serverConnection=ServerConnectionState()
+ private var serverGeneration=UUID()
  @Published var hidePreview=UserDefaults.standard.bool(forKey:"hidePreview")
  private var callRequests:[String:(id:String,done:(Bool)->Void)]=[:]
  private var syncing=false
  private var connectionGeneration=UUID()
  private var revoking=false
  private let revokeRequest:(PairSettings)async throws->Void
- init(revokeRequest:@escaping(PairSettings)async throws->Void = {p in _ = try await CloudLink(settings:p).call("/api/native/revoke")}){self.revokeRequest=revokeRequest;super.init();if let data=Secrets.get("pair"),let p=try? JSONDecoder().decode(PairSettings.self,from:data){settings=p;ble.configure(p)};ble.message={[weak self] value in self?.receive(value)};ble.transportLost={[weak self] in self?.callAlerts.stop(.connectionLost)};callAlerts.onHangup={[weak self] id,done in self?.hangupCall(id,completion:done)};callAlerts.onNotice={[weak self] text in self?.notice=text};callAlerts.onFailure={[weak self] event in guard let self,self.settings != nil,self.ble.ready,NativeCrypto.now()-event.timestamp<=CallAlertPolicy.maximumAge else{return};self.postNotification(event)};UNUserNotificationCenter.current().delegate=self}
+ typealias SyncRequest=(PairSettings,String,[String:Any])async throws->[String:Any]
+ private let syncRequest:SyncRequest
+ init(revokeRequest:@escaping(PairSettings)async throws->Void = {p in _ = try await CloudLink(settings:p).call("/api/native/revoke")},syncRequest:@escaping SyncRequest={p,path,body in try await CloudLink(settings:p).call(path,body)}){self.revokeRequest=revokeRequest;self.syncRequest=syncRequest;super.init();if let data=Secrets.get("pair"),let p=try? JSONDecoder().decode(PairSettings.self,from:data){settings=p;ble.configure(p)};ble.message={[weak self] value in self?.receive(value)};ble.transportLost={[weak self] in self?.callAlerts.stop(.connectionLost)};callAlerts.onHangup={[weak self] id,done in self?.hangupCall(id,completion:done)};callAlerts.onNotice={[weak self] text in self?.notice=text};callAlerts.onFailure={[weak self] event in guard let self,self.settings != nil,self.ble.ready,NativeCrypto.now()-event.timestamp<=CallAlertPolicy.maximumAge else{return};self.postNotification(event)};UNUserNotificationCenter.current().delegate=self}
+
+ func connectionStatus(at date:Date=Date())->RelayConnectionStatus{
+  let cloudAllowed=settings != nil && foreground && ble.phoneNetwork != .offline
+  return .resolve(bluetoothConnected:ble.connectionVerified,serverConnected:cloudAllowed && serverConnection.isVerified(at:date),attempting:ble.ready || ble.isActivelyConnecting || cloudAllowed && serverConnection.attempting)
+ }
+ var connectionDetail:String{
+  switch connectionStatus(){
+  case .bluetooth:return ble.status
+  case .server:return "블루투스 대신 서버를 통해 Galaxy와 연결되어 있습니다."
+  case .connecting:return serverConnection.attempting ? "Galaxy의 블루투스 또는 서버 응답을 확인하고 있습니다.":ble.status
+  case .disconnected:return settings==nil ? "Galaxy의 QR을 스캔해 연결해주세요.":"Galaxy의 Relay 앱과 두 기기의 인터넷·블루투스 상태를 확인해주세요."
+  }
+ }
+ private func resetServerConnection(){serverGeneration=UUID();serverConnection=ServerConnectionState();syncing=false}
+ func networkChanged(_ network:PhoneNetwork){if network == .offline{resetServerConnection()}}
 
  func permission(){Task{do{let center=UNUserNotificationCenter.current();let reply=UNTextInputNotificationAction(identifier:"REPLY",title:"답장",options:[.authenticationRequired,.foreground],textInputButtonTitle:"보내기",textInputPlaceholder:"메시지 입력");center.setNotificationCategories([UNNotificationCategory(identifier:"MESSAGE_REPLY",actions:[reply],intentIdentifiers:[])]);_ = try await center.requestAuthorization(options:[.alert,.sound,.badge])}catch{notice="iPhone 설정에서 Relay 알림 권한을 확인해주세요."}}}
  private func receive(_ value:[String:Any]){do{
@@ -29,11 +48,15 @@ import UserNotifications
  private func postNotification(_ event:RelayEvent){let content=UNMutableNotificationContent();content.title=hidePreview ? "Galaxy Relay":event.unanswered==true ? "받지 않은 전화 · "+event.heading:event.heading+" · "+event.label;content.body=hidePreview ? "새 알림이 도착했습니다.":event.message;content.sound = .default;content.userInfo=["eventId":event.id];if event.reply != nil{content.categoryIdentifier="MESSAGE_REPLY"};let tag=event.type=="call" ? (event.callId ?? event.id):event.id;let generation=connectionGeneration;UNUserNotificationCenter.current().add(UNNotificationRequest(identifier:tag,content:content,trigger:nil)){[weak self] _ in Task{@MainActor in guard let self else{return};let ended=event.type=="call"&&event.unanswered != true&&self.history.state.events.contains{$0.type=="call"&&($0.callId ?? $0.id)==(event.callId ?? event.id)&&["ended","offhook"].contains($0.state ?? "")};if self.connectionGeneration != generation || ended || event.offlineOnly==true && !self.ble.acceptsOfflineRelay{let center=UNUserNotificationCenter.current();center.removePendingNotificationRequests(withIdentifiers:[tag]);center.removeDeliveredNotifications(withIdentifiers:[tag])}}}}
 
  func sync()async{
-  guard foreground,!ble.ready,!syncing,let p=settings else{return};let generation=connectionGeneration;syncing=true;defer{if connectionGeneration==generation{syncing=false}}
-  do{let cloud=CloudLink(settings:p),start=try await cloud.call("/api/native/pull/start");guard connectionGeneration==generation else{return};guard let id=start["requestId"] as? String else{throw RelayError.invalid};let grant:[String:Any]=["requestId":id,"expires":start["expires"] ?? 0,"grant":start["grant"] ?? ""];notice="Galaxy에서 대기 알림을 가져오는 중…"
-   for _ in 0..<45{guard foreground,connectionGeneration==generation,!Task.isCancelled else{return};try await Task.sleep(nanoseconds:2_000_000_000);guard connectionGeneration==generation else{return};let result=try await cloud.call("/api/native/pull/result",grant);guard connectionGeneration==generation else{return};if result["ready"] as? Bool==true,let raw=result["packet"] as? [String:Any]{let packet=try JSONDecoder().decode(SealedPacket.self,from:NativeCrypto.json(raw));let decoded=try NativeCrypto.object(NativeCrypto.open(packet,key:NativeCrypto.bytes(p.linkKey),aad:NativeCrypto.cloudAAD(id,p.deviceId)));guard decoded["requestId"] as? String==id,let values=decoded["events"] as? [[String:Any]],values.count<=6 else{throw RelayError.authentication};for value in values{try accept(JSONDecoder().decode(RelayEvent.self,from:NativeCrypto.json(value)))};_ = try await cloud.call("/api/native/pull/ack",grant);guard connectionGeneration==generation else{return};notice=values.isEmpty ? "새 알림이 없습니다.":"대기 알림을 가져왔습니다.";return}}
-   notice="Galaxy 응답을 기다리고 있습니다. Galaxy의 인터넷과 Relay 앱을 확인해주세요."
-  }catch{guard connectionGeneration==generation else{return};notice="서버로 동기화할 수 없습니다. Galaxy의 인터넷과 Relay 앱을 확인해주세요."}
+  #if targetEnvironment(simulator)
+  if ProcessInfo.processInfo.arguments.contains("--design-preview"){return}
+  #endif
+  guard foreground,!ble.ready,!syncing,ble.phoneNetwork != .offline,let p=settings else{return};let generation=connectionGeneration,ticket=serverGeneration;syncing=true;serverConnection.begin();defer{if connectionGeneration==generation,serverGeneration==ticket{syncing=false;serverConnection.finish()}}
+  @MainActor func current()->Bool{foreground && !ble.ready && connectionGeneration==generation && serverGeneration==ticket && settings?.deviceId==p.deviceId && !Task.isCancelled}
+  do{let start=try await syncRequest(p,"/api/native/pull/start",[:]);guard current() else{return};guard let id=start["requestId"] as? String else{throw RelayError.invalid};let grant:[String:Any]=["requestId":id,"expires":start["expires"] ?? 0,"grant":start["grant"] ?? ""];notice="Galaxy에서 대기 알림을 가져오는 중…"
+   for _ in 0..<45{guard current() else{return};try await Task.sleep(nanoseconds:2_000_000_000);guard current() else{return};let result=try await syncRequest(p,"/api/native/pull/result",grant);guard current() else{return};if result["ready"] as? Bool==true,let raw=result["packet"] as? [String:Any]{let packet=try JSONDecoder().decode(SealedPacket.self,from:NativeCrypto.json(raw));let decoded=try NativeCrypto.object(NativeCrypto.open(packet,key:NativeCrypto.bytes(p.linkKey),aad:NativeCrypto.cloudAAD(id,p.deviceId)));guard decoded["requestId"] as? String==id,let values=decoded["events"] as? [[String:Any]],values.count<=6 else{throw RelayError.authentication};for value in values{try accept(JSONDecoder().decode(RelayEvent.self,from:NativeCrypto.json(value)))};_ = try await syncRequest(p,"/api/native/pull/ack",grant);guard current() else{return};serverConnection.confirm(at:Date());notice=values.isEmpty ? "새 알림이 없습니다.":"대기 알림을 가져왔습니다.";return}}
+   serverConnection.fail();notice="Galaxy 응답을 기다리고 있습니다. Galaxy의 인터넷과 Relay 앱을 확인해주세요."
+  }catch{guard current() else{return};serverConnection.fail();if error is CancellationError{return};notice="서버로 동기화할 수 없습니다. Galaxy의 인터넷과 Relay 앱을 확인해주세요."}
  }
  // Live BLE only: never persist/retry a destructive call command or send through cloud.
  private func hangupCall(_ id:String,completion:@escaping(Bool)->Void){
@@ -75,7 +98,7 @@ import UserNotifications
    if !pending.contains(where:{$0.deviceId==p.deviceId}){pending.append(p)}
    if let data=try? JSONEncoder().encode(pending){try? Secrets.put("pending-revocations",data)}
   }
-  finder.clear();connectionGeneration=UUID();callAlerts.stop(.disabled);ble.stop();ble.disconnectLocation.clear();settings=nil;busy=false;syncing=false;Secrets.remove("pair")
+  finder.clear();connectionGeneration=UUID();resetServerConnection();callAlerts.stop(.disabled);ble.stop();ble.disconnectLocation.clear();settings=nil;busy=false;syncing=false;Secrets.remove("pair")
  }
  func pair(_ qr:PairQR)throws{detach();try ble.pair(qr);notice="QR을 인식했습니다. Galaxy와 연결하는 중입니다.";Task{await retryRevocations()}}
  func unpair()async{detach();notice="이 iPhone의 연결을 해제했습니다.";await retryRevocations()}
@@ -89,5 +112,8 @@ import UserNotifications
   }
  }
  nonisolated func userNotificationCenter(_ center:UNUserNotificationCenter,didReceive response:UNNotificationResponse,withCompletionHandler completionHandler:@escaping()->Void){Task{@MainActor in defer{completionHandler()};guard let id=response.notification.request.content.userInfo["eventId"] as? String else{return};history.read(id);if response.actionIdentifier==UNNotificationDefaultActionIdentifier{openEventId=id};if let text=response as? UNTextInputNotificationResponse,let event=history.state.events.first(where:{$0.id==id}){await command("REPLY",event,replyText:text.userText)}}}
+ #if targetEnvironment(simulator)
+ func previewServerConnection(){guard ProcessInfo.processInfo.arguments.contains("--design-preview") else{return};serverConnection.confirm(at:Date())}
+ #endif
 }
 

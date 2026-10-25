@@ -27,8 +27,8 @@ import SwiftUI
     Button(action:openCamera){Label("Galaxy 카메라 실행",systemImage:"video.fill").frame(maxWidth:.infinity).padding(.vertical,10)}.buttonStyle(.bordered)
     HStack(alignment:.top,spacing:10){
      ProgressView().opacity(remote.busy ? 1:0).accessibilityHidden(!remote.busy)
-     Text(!remote.notice.isEmpty ? remote.notice:remote.busy ? "요청한 조작을 확인하고 있어요…":remote.loaded ? "Galaxy와 연결됨":"Galaxy 상태 확인 중…")
-      .font(.footnote).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
+     Text(!remote.notice.isEmpty ? remote.notice:remote.busy ? "요청한 조작을 확인하고 있어요…":remote.loaded ? "블루투스로 연결됨":"Galaxy 상태 확인 중…")
+      .font(.footnote).foregroundStyle(remote.notice.isEmpty && !remote.busy && remote.loaded ? Color.green:Color.secondary).frame(maxWidth:.infinity,alignment:.leading)
     }.frame(minHeight:30)
     Text("Galaxy의 방해금지 정책에 따라 벨소리 모드 변경이 제한될 수 있습니다.").font(.caption).foregroundStyle(.secondary)
    }.padding(20)

@@ -42,6 +42,7 @@ enum RelayTab:Hashable {case home,inbox,remote,settings}
   .sheet(item:$selected){event in DetailView(event:event,model:model,history:history).presentationDetents([.large]).presentationDragIndicator(.visible)}
   .fullScreenCover(isPresented:$cameraOpen){if let settings=model.settings{CameraView(settings:settings)}else{Text("Galaxy 연결이 필요합니다.")}}
   .onChange(of:model.settings?.deviceId){_ in cameraOpen=false}
+  .onChange(of:ble.phoneNetwork){model.networkChanged($0)}
   .sheet(isPresented:$scanning){
    QRScanner{value in
     do{try model.pair(PairQR.parse(value));scanning=false;tab = .home}
@@ -73,18 +74,17 @@ enum RelayTab:Hashable {case home,inbox,remote,settings}
   VStack(alignment:.leading,spacing:22){
    HStack(alignment:.top){
     VStack(alignment:.leading,spacing:7){
-     Label(ble.ready ? (ble.connectionVerified ? "블루투스로 연결됨":"연결 확인 필요"):ble.isConnecting ? "연결하는 중":"Galaxy 연결",systemImage:ble.ready ? "checkmark.circle.fill":ble.isConnecting ? "arrow.triangle.2.circlepath":"link")
-      .font(.subheadline.weight(.semibold)).foregroundStyle(ble.ready && ble.connectionVerified ? Color.green:Color.blue)
+     ConnectionStatusLabel(model:model,ble:ble).font(.subheadline.weight(.semibold))
      Text(model.settings?.galaxyName ?? "내 Galaxy와 연결하세요").font(.title2.bold()).fixedSize(horizontal:false,vertical:true)
     };Spacer()
-    if ble.isConnecting{ProgressView().padding(.top,4)}
+    if model.connectionStatus() == .connecting{ProgressView().padding(.top,4)}
    }
    HStack(spacing:18){
     device("Galaxy",symbol:"smartphone",battery:ble.remoteBattery?.battery,updatedAt:ble.remoteBattery.map{Date(timeIntervalSince1970:Double($0.reportedAt)/1000)})
     VStack(spacing:8){Image(systemName:ble.ready ? "arrow.left.arrow.right":"ellipsis").font(.title3).foregroundStyle(ble.ready ? Color.blue:Color.secondary);if let contact=ble.lastContactAt{Text(contact,style:.relative).font(.caption2).foregroundStyle(.secondary).accessibilityLabel(Text("마지막 통신 확인 ")+Text(contact,style:.relative))}}.frame(maxWidth:.infinity)
     device("iPhone",symbol:"iphone",battery:ble.localBattery)
    }.padding(.vertical,3)
-   if !ble.ready{Text(ble.status).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
+   if !ble.ready{Text(model.connectionDetail).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
    if !ble.ready{Button{model.permission();scan()}label:{Label(ble.isConnecting ? "새 QR로 연결":"QR로 Galaxy 연결",systemImage:"qrcode.viewfinder").frame(maxWidth:.infinity).padding(.vertical,5)}.relayPrimaryButton()}
   }.padding(22).relayCard()
  }
@@ -206,7 +206,8 @@ struct NotificationRow:View {
     Section("연결"){
      LabeledContent("Galaxy",value:model.settings?.galaxyName ?? "연결 전")
      LabeledContent("이 iPhone의 네트워크",value:ble.phoneNetwork.label)
-     Label(ble.status,systemImage:ble.ready ? "checkmark.circle.fill":"antenna.radiowaves.left.and.right").foregroundStyle(ble.ready ? Color.green:Color.secondary)
+     ConnectionStatusLabel(model:model,ble:ble)
+     Text(model.connectionDetail).font(.caption).foregroundStyle(.secondary)
      if !ble.ready{Button{model.permission();scan()}label:{Label("QR로 연결",systemImage:"qrcode.viewfinder")}}
      Button("이 iPhone의 알림 허용"){model.permission()}
      Button("Galaxy 연결 테스트"){Task{await model.command("PING",nil)}}.disabled(model.settings==nil||model.busy)

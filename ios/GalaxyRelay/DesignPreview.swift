@@ -17,6 +17,7 @@ import UIKit
    if let data=try? NativeCrypto.json(value),let event=try? JSONDecoder().decode(RelayEvent.self,from:data){_ = try? model.history.apply(event)}
   }
   model.settings=PairSettings(pairId:NativeCrypto.uuid(),serviceUUID:NativeCrypto.uuid(),galaxyName:"Galaxy S24+",linkKey:"",commandKey:"",backend:"https://example.invalid",deviceId:NativeCrypto.uuid(),token:"fixture-only");model.ble.previewConnection();model.notice="디자인 미리보기 · 예시 알림"
+  if ProcessInfo.processInfo.arguments.contains("--design-server"){model.previewServerConnection()}
   if ProcessInfo.processInfo.arguments.contains("--design-detail"){model.openEventId=model.history.state.events.first?.id}
  }
 }
